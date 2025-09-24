@@ -2,10 +2,11 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import *
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from io import BytesIO
+import aiofiles.os
 import math
 import os
 import uuid
@@ -35,6 +36,7 @@ class MyPlugin(Star):
         if at_messages: at_id = at_messages[0].qq
         
         tmp_path = None
+        img = None
         try:
             # 构造 payload
             if at_id:
@@ -71,8 +73,17 @@ class MyPlugin(Star):
             logger.error(f"查询过程中发生错误: {str(e)}")
             yield event.plain_result(f"查询过程中发生错误，请稍后再试或联系管理员。错误信息：{str(e)}")
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            # 显式关闭PIL.Image对象
+            if img:
+                img.close()
+            
+            # 使用异步文件操作
+            if tmp_path:
+                try:
+                    if await aiofiles.os.path.exists(tmp_path):
+                        await aiofiles.os.remove(tmp_path)
+                except Exception as e:
+                    logger.error(f"删除临时文件失败: {str(e)}")
 
     @filter.command("b50", priority = 1)
     async def b50(self, event: AstrMessageEvent):
@@ -156,7 +167,7 @@ class MyPlugin(Star):
     async def getAIComment(self, score: str, event: AstrMessageEvent) -> str:
         prov = self.context.get_using_provider(umo=event.unified_msg_origin)
         if not prov:
-            return "找不到可用的AI模型，主播今天罢工了。"
+            return "找不到可用的AI模型，主播今天先下播了。"
         
         try:
             # 从配置中获取prompt
@@ -180,20 +191,45 @@ class MyPlugin(Star):
                 context=context,
                 system_prompt=system_prompt
             )
-            raw_text = str(llm_resp)
-            match = re.search(r"Plain\(.*?text='(.*?)', convert=True\)", raw_text, re.DOTALL)
-            if match:
-                raw_text = str(llm_resp)
-                match = re.search(r"text='(.*?)'", raw_text, re.DOTALL)
-                if match:
-                    llm_text = match.group(1)
-                    # 再次保险，移除所有可能的换行符
-                    llm_text = llm_text.replace('\\n', ' ').replace('\n', ' ')
-                    logger.info(f"AI锐评原文: {llm_text}")
-                    return llm_text
-                else:
-                    logger.error(f"无法从AI响应中提取文本: {raw_text}")
-                    return "AI的回复格式不对，主播翻译不了了。"
+            # 更健壮的响应解析方式
+            llm_text = self._extract_text_from_response(llm_resp)
+            if llm_text:
+                # 移除所有可能的换行符
+                llm_text = llm_text.replace('\\n', ' ').replace('\n', ' ')
+                logger.info(f"AI锐评原文: {llm_text}")
+                return llm_text
+            else:
+                logger.error(f"无法从AI响应中提取文本")
+                return "AI的回复格式不对，主播翻译不了了。"
         except Exception as e:
             logger.error(f"AI锐评时发生错误: {e}")
             return "哎呀，主播没吃够韭菜盒子，锐评不了了。"
+    
+    def _extract_text_from_response(self, response: Any) -> Optional[str]:
+        """从AI响应中提取文本，使用更健壮的方式"""
+        try:
+            # 尝试直接访问属性
+            if hasattr(response, 'text'):
+                return response.text
+            
+            # 如果是Plain对象
+            if hasattr(response, '__class__') and response.__class__.__name__ == 'Plain':
+                if hasattr(response, 'text'):
+                    return response.text
+            
+            # 如果是字典或类似字典的对象
+            if hasattr(response, 'get'):
+                if 'text' in response:
+                    return response['text']
+            
+            # 最后尝试字符串解析（作为后备方案）
+            raw_text = str(response)
+            match = re.search(r"text='(.*?)'", raw_text, re.DOTALL)
+            if match:
+                return match.group(1)
+            
+            # 如果所有方法都失败
+            return None
+        except Exception as e:
+            logger.error(f"提取AI响应文本时发生错误: {e}")
+            return None
