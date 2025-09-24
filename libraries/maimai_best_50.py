@@ -537,16 +537,16 @@ def computeRa(ds: float, achievement: float) -> int:
     return math.floor(ds * (min(100.5, achievement) / 100) * baseRa)
 
 
-async def generate50(payload: Dict) -> Tuple[Optional[Image.Image], int]:
+async def generate50(payload: Dict) -> Tuple[Optional[Image.Image], int, Optional[str]]:
     async with aiohttp.request(
         "POST",
         "https://www.diving-fish.com/api/maimaidxprober/query/player",
         json=payload,
     ) as resp:
         if resp.status == 400:
-            return None, 400
+            return None, 400, None
         if resp.status == 403:
-            return None, 403
+            return None, 403, None
         sd_best = BestList(35)
         dx_best = BestList(15)
         obj = await resp.json()
@@ -556,5 +556,21 @@ async def generate50(payload: Dict) -> Tuple[Optional[Image.Image], int]:
             sd_best.push(await ChartInfo.from_json(c))
         for c in dx:
             dx_best.push(await ChartInfo.from_json(c))
-        pic = DrawBest(sd_best, dx_best, obj["nickname"]).getDir()
-        return pic, 0
+
+        nickname = obj["nickname"]
+        sd_rating = sum(c.ra for c in sd_best)
+        dx_rating = sum(c.ra for c in dx_best)
+        total_rating = sd_rating + dx_rating
+
+        text_result = f"玩家: {nickname}\n"
+        text_result += f"Rating: {total_rating} (SD: {sd_rating} + DX: {dx_rating})\n\n"
+        text_result += "--- SD Best (B35) ---\n"
+        for i, chart in enumerate(sd_best):
+            text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+
+        text_result += "\n--- DX Best (B15) ---\n"
+        for i, chart in enumerate(dx_best):
+            text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+
+        pic = DrawBest(sd_best, dx_best, nickname).getDir()
+        return pic, 0, text_result

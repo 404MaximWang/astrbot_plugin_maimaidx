@@ -43,8 +43,8 @@ async def check_mai(force: bool = False):  # noqa: FBT001
             logger.warning(f"自动下载出错\n{e}\n请自行尝试手动下载")
             msg = f"自动下载出错\n{e}\n请自行尝试手动下载"
         return msg
-    logger.info("已经成功下载，无需下载")
-    return "已经成功下载，无需下载"
+    logger.info("已经成功下载，无需重复下载")
+    return "已经成功下载，无需重复下载"
 import asyncio
 from bs4 import BeautifulSoup
 

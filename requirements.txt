@@ -1,3 +1,5 @@
 aiohttp
 Pillow
 beautifulsoup4
+httpx
+aiofiles
