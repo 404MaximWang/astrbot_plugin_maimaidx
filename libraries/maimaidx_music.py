@@ -4,7 +4,7 @@ import unicodedata
 from copy import deepcopy
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union
 
-import aiohttp
+import httpx
 
 class Chart(Dict):
     tap: Optional[int] = None
@@ -132,9 +132,9 @@ async def initialize_music_data():
     global obj, total_list
 
     async def fetch_json(url):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                return await response.json(encoding='utf-8')
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            return response.json()
 
     obj = await fetch_json("https://www.diving-fish.com/api/maimaidxprober/music_data")
     total_list.extend(Music(m) for m in obj)

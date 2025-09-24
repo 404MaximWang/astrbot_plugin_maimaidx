@@ -7,7 +7,6 @@ import aiofiles
 import httpx
 from .api import update_pl
 from .libraries.image import *
-import aiohttp
 
 
 
@@ -50,16 +49,15 @@ from bs4 import BeautifulSoup
 
 COVER_URL = "https://www.diving-fish.com/covers/"
 
-async def download_cover(session, url, path):
+async def download_cover(client: httpx.AsyncClient, url: str, path: Path):
     """下载单个封面文件"""
     try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                content = await response.read()
-                async with aiofiles.open(path, "wb") as f:
-                    await f.write(content)
-                return True
-            return False
+        response = await client.get(url)
+        if response.status_code == 200:
+            async with aiofiles.open(path, "wb") as f:
+                await f.write(response.content)
+            return True
+        return False
     except Exception as e:
         logger.error(f"下载封面失败: {url}, 错误: {e}")
         return False
@@ -92,11 +90,11 @@ async def update_covers():
             logger.info(f"发现 {len(missing_files)} 个缺失的封面，开始下载...")
 
             tasks = []
-            async with aiohttp.ClientSession() as session:
+            async with httpx.AsyncClient() as client:
                 for filename in missing_files:
                     url = f"{COVER_URL}{filename}"
                     path = cover_dir / filename
-                    tasks.append(download_cover(session, url, path))
+                    tasks.append(download_cover(client, url, path))
                 
                 results = await asyncio.gather(*tasks)
             

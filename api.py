@@ -4,14 +4,14 @@ from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlencode
 
-import aiohttp
+import httpx
 from .libraries.tool import STATIC
 
 async def update_pl():
-    async with aiohttp.ClientSession() as session:
+    async with httpx.AsyncClient() as client:
         urls = "http://wc.wahlap.net/maidx/rest/location"
-        async with session.get(urls) as response:
-            result = await response.json()
+        response = await client.get(urls)
+        result = response.json()
     if result:
         with (
             Path(STATIC)

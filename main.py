@@ -11,8 +11,7 @@ import os
 import uuid
 import re
 from .libraries.image import *
-from .libraries.maimai_best_40 import generate
-from .libraries.maimai_best_50 import generate50
+from .libraries.maimai_best import generate
 from .libraries.maimaidx_music import *
 from .libraries.tool import hash_, STATIC
 from .public import *
@@ -45,7 +44,7 @@ class MyPlugin(Star):
             # 优先级顺序：at大于文字用户名(仅b40)大于发送者ID
             logger.info(f"Payload: {payload}")
             
-            img, success, text_result = await generate50(payload) if is_b50 else await generate(payload)
+            img, success, text_result = await generate(payload, is_b50)
             
             if success == 400:
                 yield event.plain_result("未找到此玩家，请确保此玩家的用户名和查分器中的用户名相同。")
