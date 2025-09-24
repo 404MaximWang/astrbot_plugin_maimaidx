@@ -4,7 +4,9 @@ Transplanted from [maimai_plugin](https://github.com/Agnes4m/maimai_plugin) for 
 
 ## 功能特性
 
-目前仅实现了 **b40** 和 **b50** 功能，项目正在积极开发中...
+一款支持AI锐评功能的舞萌插件。作者希望此插件能成为您身边的Sunny_DucK。
+
+目前仅实现了 **b40** 和 **b50** 功能。默认AI人格为电棍。
 
 ## 使用方法
 
