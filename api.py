@@ -5,7 +5,7 @@ from typing import Dict, List
 from urllib.parse import urlencode
 
 import httpx
-from .libraries.tool import STATIC
+from .libraries.utils import STATIC
 
 async def update_pl():
     async with httpx.AsyncClient() as client:
