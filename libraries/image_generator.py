@@ -1,10 +1,8 @@
-# Author: xyb, Diving_Fish
-# rewrite Anges Digital
-
 import math
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 import uuid
+from astrbot.api import logger
 from io import BytesIO
 
 import httpx
@@ -33,8 +31,9 @@ async def convert_chart_info_to_api_format(chart_info: ChartInfo) -> Dict[str, A
         4: "re:master"
     }
     difficulty_str = difficulty_map.get(chart_info.diff, "expert")
+    type_str = "std" if chart_info.tp == "SD" else "dx"
     return {
-        "sheetId": f"{chart_info.title}__dxrt__{chart_info.tp.lower()}__dxrt__{difficulty_str}",
+        "sheetId": f"{chart_info.title}__dxrt__{type_str}__dxrt__{difficulty_str}",
         "achievementRate": chart_info.achievement
     }
 
@@ -65,6 +64,7 @@ async def send_oneshot_request(
                 timeout=30
             )
             if response.status_code == 200:
+                logger.info(f"OneShot图片生成成功，上传的JSON数据: {payload}")
                 return response.content
             else:
                 logger.info(f"OneShot图片生成失败: {response.status_code}")

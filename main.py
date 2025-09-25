@@ -7,7 +7,6 @@ from pathlib import Path
 import uuid
 import re
 import json
-from pathlib import Path
 from .libraries.image import DrawBest
 from .libraries.image_generator import generate, handle_oneshot_command
 from .libraries.maimaidx_music import *
@@ -18,7 +17,7 @@ from .public import *
 from .api import *
 import asyncio
 
-@register("astrbot_plugin_maimaidx", "0xa7973908", "A maimaidx helper for Astrbot.", "0.2")
+@register("astrbot_plugin_maimaidx", "0xa7973908", "A maimaidx helper for Astrbot.", "1.1")
 class MyPlugin(Star):
     @filter.command("b50", priority = 1)
     async def b50(self, event: AstrMessageEvent):
@@ -73,31 +72,13 @@ class MyPlugin(Star):
         at_id = at_messages[0].qq if at_messages else None
 
         if at_id:
-            payload = {"qq": at_id, "b50": 1}
+            payload = {"qq": at_id, "b50": 0}
         elif username:
-            payload = {"username": username, "b50": 1}
+            payload = {"username": username, "b50": 0}
         else:
-            payload = {"qq": str(user_id), "b50": 1}
+            payload = {"qq": str(user_id), "b50": 0}
         logger.info(f"Payload: {payload}")
         
-        use_web_generator = self.context._config.get('web_image_generator', True)
-        if use_web_generator:
-            try:
-                logger.info("尝试使用OneShot逻辑生成B40图片")
-                result = await handle_oneshot_command(payload, is_b50=False)
-                if result:
-                    oneshot_path, text_result = result
-                    yield event.image_result(oneshot_path)
-                    
-                    ai_comment = await self.getAIComment(text_result, event)
-                    if isinstance(ai_comment, str) and ai_comment:
-                        yield event.plain_result(ai_comment)
-                    return
-                else:
-                    logger.warning("OneShot生成失败，回退到本地生成")
-            except Exception as e:
-                logger.error(f"OneShot生成时发生错误，回退到本地生成: {e}")
-
         async for result in self._generate_local_image(event, payload, is_b50=False):
             yield result
             
@@ -133,11 +114,16 @@ class MyPlugin(Star):
         finally:
             if img:
                 img.close()
-            if tmp_path and await aiofiles.os.path.exists(tmp_path):
-                try:
-                    await aiofiles.os.remove(tmp_path)
-                except Exception as e:
-                    logger.error(f"删除临时文件失败: {str(e)}")
+            if tmp_path:
+                # 使用 asyncio.run_in_executor 来检查文件是否存在
+                loop = asyncio.get_event_loop()
+                file_exists = await loop.run_in_executor(None, lambda: tmp_path.exists())
+                if file_exists:
+                    try:
+                        # 使用 asyncio.run_in_executor 来删除文件
+                        await loop.run_in_executor(None, lambda: tmp_path.unlink())
+                    except Exception as e:
+                        logger.error(f"删除临时文件失败: {str(e)}")
 
     @filter.command("maihelp", aliases={"舞萌帮助", "mai帮助"}, priority = 1)
     async def help_msg(self, event: AstrMessageEvent):
