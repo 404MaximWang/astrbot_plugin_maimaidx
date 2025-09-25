@@ -13,6 +13,7 @@ from astrbot.api import logger
 
 from .maimaidx_music import get_cover_len5_id, total_list
 from .path_config import STATIC
+from .models import BestList, ChartInfo, diffs
 
 scoreRank = [
     "D", "C", "B", "BB", "BBB", "A", "AA", "AAA", "S", "S+", "SS", "SS+", "SSS", "SSS+",
