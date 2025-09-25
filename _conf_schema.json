@@ -1,0 +1,7 @@
+{
+  "web_image_generator": {
+    "description": "勾选将使用dxrating.net生成图像。不勾选则本地生成图像。",
+    "type": "bool",
+    "default": true
+    }
+}

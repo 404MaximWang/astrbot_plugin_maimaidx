@@ -1,64 +1,174 @@
+# Author: xyb, Diving_Fish
+# rewrite Anges Digital
+
+import math
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Tuple
+import uuid
 from io import BytesIO
 
-from PIL import Image, ImageDraw, ImageFont
+import httpx
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from astrbot.api import logger
 
+from .maimaidx_music import get_cover_len5_id, total_list
 from .path_config import STATIC
 
-path = STATIC / "high_eq_image.png"
-fontpath = STATIC / "msyh.ttc"
+scoreRank = [
+    "D", "C", "B", "BB", "BBB", "A", "AA", "AAA", "S", "S+", "SS", "SS+", "SSS", "SSS+",
+]
+combo = ["", "FC", "FC+", "AP", "AP+"]
 
 
-def draw_text(img_pil, text, offset_x):
-    draw = ImageDraw.Draw(img_pil)
-    font = ImageFont.truetype(fontpath, 48)
-    left, top, right, bottom = draw.textbbox((0, 0), text, font)
-    width, height = right - left, bottom - top
-    x = 5
-    if width > 390:
-        font = ImageFont.truetype(fontpath, int(390 * 48 / width))
-        left, top, right, bottom = draw.textbbox((0, 0), text, font)
-        width, height = right - left, bottom - top
-    else:
-        x = int((400 - width) / 2)
-    draw.rectangle(
-        (x + offset_x - 2, 360, x + 2 + width + offset_x, 360 + height * 1.2),
-        fill=(0, 0, 0, 255),
-    )
-    draw.text((x + offset_x, 360), text, font=font, fill=(255, 255, 255, 255))
-
-
-def text_to_image(text):
-    font = ImageFont.truetype(fontpath, 24)
-    padding = 10
-    margin = 4
-    text_list = text.split("\n")
-    max_width = 0
-    h = 0
-    for text in text_list:
-        left, top, right, bottom = font.getbbox(text)
-        w, h = right - left, bottom - top
-        max_width = max(max_width, w)
-    wa = int(max_width + padding * 2)
-    ha = int(h * len(text_list) + margin * (len(text_list) - 1) + padding * 2)
-    i = Image.new("RGB", (wa, ha), color=(255, 255, 255))
-    draw = ImageDraw.Draw(i)
-    for j in range(len(text_list)):
-        text = text_list[j]
-        draw.text((padding, padding + j * (margin + h)), text, font=font, fill=(0, 0, 0))
-    return i
-
-
-def image_to_bytes(img, img_format="PNG"):
+async def convert_chart_info_to_api_format(chart_info: ChartInfo) -> Dict[str, Any]:
     """
-    将 PIL Image 对象转换为 bytes 对象
+    将ChartInfo对象转换为API所需的格式
     """
-    output_buffer = BytesIO()
-    img.save(output_buffer, format=img_format)
-    return output_buffer.getvalue()
+    difficulty_map = {
+        0: "basic",
+        1: "advanced",
+        2: "expert",
+        3: "master",
+        4: "re:master"
+    }
+    difficulty_str = difficulty_map.get(chart_info.diff, "expert")
+    return {
+        "sheetId": f"{chart_info.title}__dxrt__{chart_info.tp.lower()}__dxrt__{difficulty_str}",
+        "achievementRate": chart_info.achievement
+    }
 
-from .image_generator import BestList, ChartInfo, computeRa
-from .maimaidx_music import get_cover_len5_id
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+async def send_oneshot_request(
+    version: str,
+    region: str,
+    b15_entries: List[Dict[str, Any]],
+    b35_entries: List[Dict[str, Any]]
+) -> Optional[bytes]:
+    """
+    向远程API发送OneShot图片生成请求并返回图片数据
+    """
+    payload = {
+        "version": version,
+        "region": region,
+        "calculatedEntries": {
+            "b15": b15_entries,
+            "b35": b35_entries
+        }
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                'https://miruku.dxrating.net/functions/render-oneshot/v0?pixelated=1',
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=30
+            )
+            if response.status_code == 200:
+                return response.content
+            else:
+                logger.info(f"OneShot图片生成失败: {response.status_code}")
+                return None
+    except Exception as e:
+        logger.error(f"OneShot图片生成异常: {e}")
+        return None
+
+
+async def generate_oneshot_data(
+    sd_best: BestList,
+    dx_best: BestList,
+    version: str = "PRiSM",
+    region: str = "cn"
+) -> Optional[bytes]:
+    """
+    生成OneShot图片数据并发送请求
+    """
+    b15_data = [await convert_chart_info_to_api_format(chart) for chart in dx_best]
+    b35_data = [await convert_chart_info_to_api_format(chart) for chart in sd_best]
+    return await send_oneshot_request(version, region, b15_data, b35_data)
+
+
+async def save_oneshot_image_to_tmp(oneshot_data: bytes) -> Optional[str]:
+    """
+    将oneshot图片数据保存到临时文件并返回路径
+    """
+    if not oneshot_data:
+        return None
+    try:
+        tmp_dir = STATIC / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        tmp_path = tmp_dir / f"{uuid.uuid4()}.png"
+        with open(tmp_path, "wb") as f:
+            f.write(oneshot_data)
+        return str(tmp_path)
+    except Exception as e:
+        logger.error(f"保存OneShot图片到临时文件失败: {e}")
+        return None
+
+
+async def handle_oneshot_command(payload: Dict, is_b50: bool = False) -> Optional[Tuple[str, str]]:
+    """
+    处理oneshot命令，生成并返回oneshot图片路径和成绩文本
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://www.diving-fish.com/api/maimaidxprober/query/player",
+                json=payload,
+            )
+            if resp.status_code != 200:
+                return None
+            obj = resp.json()
+
+        nickname = obj["nickname"]
+
+        if is_b50:
+            sd_best = BestList(35)
+            dx_best = BestList(15)
+        else:
+            sd_best = BestList(25)
+            dx_best = BestList(15)
+
+        dx: List[Dict] = obj["charts"]["dx"]
+        sd: List[Dict] = obj["charts"]["sd"]
+        for c in sd:
+            sd_best.push(await ChartInfo.from_json(c))
+        for c in dx:
+            dx_best.push(await ChartInfo.from_json(c))
+
+        if is_b50:
+            sd_rating = sum(computeRa(c.ds, c.achievement, is_b50) for c in sd_best)
+            dx_rating = sum(computeRa(c.ds, c.achievement, is_b50) for c in dx_best)
+            total_rating = sd_rating + dx_rating
+            text_result = f"玩家: {nickname}\n"
+            text_result += f"Rating: {total_rating} (SD: {sd_rating} + DX: {dx_rating})\n\n"
+            text_result += "--- SD Best (B35) ---\n"
+            for i, chart in enumerate(sd_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {computeRa(chart.ds, chart.achievement, is_b50)}\n"
+            text_result += "\n--- DX Best (B15) ---\n"
+            for i, chart in enumerate(dx_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {computeRa(chart.ds, chart.achievement, is_b50)}\n"
+        else:
+            rating = obj["rating"]
+            additional_rating = obj["additional_rating"]
+            total_rating = rating + additional_rating
+            text_result = f"玩家: {nickname}\n"
+            text_result += f"Rating: {total_rating} (底分: {rating} + 段位分: {additional_rating})\n\n"
+            text_result += "--- SD Best (B25) ---\n"
+            for i, chart in enumerate(sd_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+            text_result += "\n--- DX Best (B15) ---\n"
+            for i, chart in enumerate(dx_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+        
+        oneshot_data = await generate_oneshot_data(sd_best, dx_best, "PRiSM", "cn")
+        if oneshot_data:
+            tmp_path = await save_oneshot_image_to_tmp(oneshot_data)
+            if tmp_path:
+                return tmp_path, text_result
+    except Exception as e:
+        logger.error(f"处理oneshot命令时出错: {e}")
+        raise e
+    return None
 
 
 class DrawBest(object):
@@ -378,3 +488,100 @@ class DrawBest(object):
 
     def getDir(self):
         return self.img
+
+
+def computeRa(ds: float, achievement: float, is_b50: bool = False) -> int:
+    if is_b50:
+        baseRa = 22.4
+        if achievement < 50: baseRa = 7.0
+        elif achievement < 60: baseRa = 8.0
+        elif achievement < 70: baseRa = 9.6
+        elif achievement < 75: baseRa = 11.2
+        elif achievement < 80: baseRa = 12.0
+        elif achievement < 90: baseRa = 13.6
+        elif achievement < 94: baseRa = 15.2
+        elif achievement < 97: baseRa = 16.8
+        elif achievement < 98: baseRa = 20.0
+        elif achievement < 99: baseRa = 20.3
+        elif achievement < 99.5: baseRa = 20.8
+        elif achievement < 100: baseRa = 21.1
+        elif achievement < 100.5: baseRa = 21.6
+    else:
+        baseRa = 15.0
+        if achievement >= 50 and achievement < 60: baseRa = 5.0
+        elif achievement < 70: baseRa = 6.0
+        elif achievement < 75: baseRa = 7.0
+        elif achievement < 80: baseRa = 7.5
+        elif achievement < 90: baseRa = 8.0
+        elif achievement < 94: baseRa = 9.0
+        elif achievement < 97: baseRa = 9.4
+        elif achievement < 98: baseRa = 10.0
+        elif achievement < 99: baseRa = 11.0
+        elif achievement < 99.5: baseRa = 12.0
+        elif achievement < 99.99: baseRa = 13.0
+        elif achievement < 100: baseRa = 13.5
+        elif achievement < 100.5: baseRa = 14.0
+
+    return math.floor(ds * (min(100.5, achievement) / 100) * baseRa)
+
+
+async def generate(payload: Dict, is_b50: bool = False) -> Tuple[Optional[Image.Image], int, Optional[str]]:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://www.diving-fish.com/api/maimaidxprober/query/player",
+            json=payload,
+        )
+        if resp.status_code == 400: return None, 400, None
+        if resp.status_code == 403: return None, 403, None
+        
+        obj = resp.json()
+        if is_b50:
+            sd_best = BestList(35)
+            dx_best = BestList(15)
+        else:
+            sd_best = BestList(25)
+            dx_best = BestList(15)
+
+        dx: List[Dict] = obj["charts"]["dx"]
+        sd: List[Dict] = obj["charts"]["sd"]
+        for c in sd:
+            sd_best.push(await ChartInfo.from_json(c))
+        for c in dx:
+            dx_best.push(await ChartInfo.from_json(c))
+
+        nickname = obj["nickname"]
+        
+        if is_b50:
+            sd_rating = sum(computeRa(c.ds, c.achievement, is_b50) for c in sd_best)
+            dx_rating = sum(computeRa(c.ds, c.achievement, is_b50) for c in dx_best)
+            total_rating = sd_rating + dx_rating
+            text_result = f"玩家: {nickname}\n"
+            text_result += f"Rating: {total_rating} (SD: {sd_rating} + DX: {dx_rating})\n\n"
+            text_result += "--- SD Best (B35) ---\n"
+            for i, chart in enumerate(sd_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {computeRa(chart.ds, chart.achievement, is_b50)}\n"
+            
+            text_result += "\n--- DX Best (B15) ---\n"
+            for i, chart in enumerate(dx_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {computeRa(chart.ds, chart.achievement, is_b50)}\n"
+
+            pic = DrawBest(sd_best, dx_best, nickname, total_rating, 0, is_b50=True).getDir()
+            
+            return pic, 0, text_result
+        else:
+            rating = obj["rating"]
+            additional_rating = obj["additional_rating"]
+            total_rating = rating + additional_rating
+            text_result = f"玩家: {nickname}\n"
+            text_result += f"Rating: {total_rating} (底分: {rating} + 段位分: {additional_rating})\n\n"
+            text_result += "--- SD Best (B25) ---\n"
+            for i, chart in enumerate(sd_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+            
+            text_result += "\n--- DX Best (B15) ---\n"
+            for i, chart in enumerate(dx_best):
+                text_result += f"#{i+1}: {chart.title} [{diffs[chart.diff]}] | DS: {chart.ds:.1f}, Ach: {chart.achievement:.4f}%, RA: {chart.ra}\n"
+
+            pic = DrawBest(sd_best, dx_best, nickname, total_rating, rating, is_b50=False).getDir()
+            
+            return pic, 0, text_result

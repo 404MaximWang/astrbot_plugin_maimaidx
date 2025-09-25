@@ -4,50 +4,108 @@ from astrbot.api import logger
 from astrbot.api.message_components import *
 from typing import List, Dict, Optional, Tuple, Any
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
-from io import BytesIO
-import aiofiles.os
-import math
-import os
 import uuid
 import re
 import json
 from pathlib import Path
-from .libraries.image import *
-from .libraries.maimai_best import generate
+from .libraries.image import DrawBest
+from .libraries.image_generator import generate, handle_oneshot_command
 from .libraries.maimaidx_music import *
-from .libraries.tool import hash_, STATIC
+from .libraries.utils import hash_
+from .libraries.path_config import STATIC
+from .libraries.models import *
 from .public import *
 from .api import *
 import asyncio
 
-@register("astrbot_plugin_maimaidx", "0xa7973908", "A maimaidx helper for Astrbot.", "0.1")
+@register("astrbot_plugin_maimaidx", "0xa7973908", "A maimaidx helper for Astrbot.", "0.2")
 class MyPlugin(Star):
-    async def _process_request(self, event: AstrMessageEvent, is_b50: bool):
-        logger.info(f"开始查询{'b50' if is_b50 else 'b40'}")
+    @filter.command("b50", priority = 1)
+    async def b50(self, event: AstrMessageEvent):
+        logger.info("开始查询b50")
+        
+        # 提取用户信息
         user_id = event.get_sender_id()
         at_messages = [comp for comp in event.message_obj.message if isinstance(comp, At)]
         plain_text = event.message_str.strip()
-        if " " in plain_text:
-            username = plain_text.split(" ", 1)[1]
+        username = plain_text.split(" ", 1)[1] if " " in plain_text else ""
+        at_id = at_messages[0].qq if at_messages else None
+
+        # 构造 payload
+        if at_id:
+            payload = {"qq": at_id, "b50": 1}
+        elif username:
+            payload = {"username": username, "b50": 1}
         else:
-            username = ""
-        at_id = None
-        if at_messages: at_id = at_messages[0].qq
+            payload = {"qq": str(user_id), "b50": 1}
+        logger.info(f"Payload: {payload}")
+
+        use_web_generator = self.context._config.get('web_image_generator', True)
+        if use_web_generator:
+            try:
+                logger.info("尝试使用OneShot逻辑生成B50图片")
+                result = await handle_oneshot_command(payload, is_b50=True)
+                if result:
+                    oneshot_path, text_result = result
+                    yield event.image_result(oneshot_path)
+                    
+                    ai_comment = await self.getAIComment(text_result, event)
+                    if isinstance(ai_comment, str) and ai_comment:
+                        yield event.plain_result(ai_comment)
+                    return
+                else:
+                    logger.warning("OneShot生成失败，回退到本地生成")
+            except Exception as e:
+                logger.error(f"OneShot生成时发生错误，回退到本地生成: {e}")
         
+        # B50本地生成逻辑 (回退)
+        async for result in self._generate_local_image(event, payload, is_b50=True):
+            yield result
+
+    @filter.command("b40", priority = 1)
+    async def b40(self, event: AstrMessageEvent):
+        logger.info("开始查询b40")
+        
+        user_id = event.get_sender_id()
+        at_messages = [comp for comp in event.message_obj.message if isinstance(comp, At)]
+        plain_text = event.message_str.strip()
+        username = plain_text.split(" ", 1)[1] if " " in plain_text else ""
+        at_id = at_messages[0].qq if at_messages else None
+
+        if at_id:
+            payload = {"qq": at_id, "b50": 1}
+        elif username:
+            payload = {"username": username, "b50": 1}
+        else:
+            payload = {"qq": str(user_id), "b50": 1}
+        logger.info(f"Payload: {payload}")
+        
+        use_web_generator = self.context._config.get('web_image_generator', True)
+        if use_web_generator:
+            try:
+                logger.info("尝试使用OneShot逻辑生成B40图片")
+                result = await handle_oneshot_command(payload, is_b50=False)
+                if result:
+                    oneshot_path, text_result = result
+                    yield event.image_result(oneshot_path)
+                    
+                    ai_comment = await self.getAIComment(text_result, event)
+                    if isinstance(ai_comment, str) and ai_comment:
+                        yield event.plain_result(ai_comment)
+                    return
+                else:
+                    logger.warning("OneShot生成失败，回退到本地生成")
+            except Exception as e:
+                logger.error(f"OneShot生成时发生错误，回退到本地生成: {e}")
+
+        async for result in self._generate_local_image(event, payload, is_b50=False):
+            yield result
+            
+    async def _generate_local_image(self, event: AstrMessageEvent, payload: dict, is_b50: bool):
+        """本地生成B40/B50图片"""
         tmp_path = None
         img = None
         try:
-            # 构造 payload
-            if at_id:
-                payload = {"qq": at_id, "b50": 1}
-            elif username:
-                payload = {"username": username, "b50": 1}
-            else:
-                payload = {"qq": str(user_id), "b50": 1}
-            # 优先级顺序：at大于文字用户名(仅b40)大于发送者ID
-            logger.info(f"Payload: {payload}")
-            
             img, success, text_result = await generate(payload, is_b50)
             
             if success == 400:
@@ -60,7 +118,7 @@ class MyPlugin(Star):
                 tmp_path = tmp_dir / f"{uuid.uuid4()}.png"
                 img.save(tmp_path)
                 yield event.image_result(str(tmp_path))
-                # yield event.plain_result(text_result)  # 注释掉此行，不再直接输出成绩文本
+                
                 ai_comment = await self.getAIComment(text_result, event)
                 if isinstance(ai_comment, str) and ai_comment:
                     yield event.plain_result(ai_comment)
@@ -70,30 +128,16 @@ class MyPlugin(Star):
             logger.error("资源文件未找到")
             yield event.plain_result("资源未下载，请超级管理员使用`检查mai资源`指令")
         except Exception as e:
-            logger.error(f"查询过程中发生错误: {str(e)}")
+            logger.error(f"本地图片生成过程中发生错误: {str(e)}")
             yield event.plain_result(f"查询过程中发生错误，请稍后再试或联系管理员。错误信息：{str(e)}")
         finally:
-            # 显式关闭PIL.Image对象
             if img:
                 img.close()
-            
-            # 使用异步文件操作
-            if tmp_path:
+            if tmp_path and await aiofiles.os.path.exists(tmp_path):
                 try:
-                    if await aiofiles.os.path.exists(tmp_path):
-                        await aiofiles.os.remove(tmp_path)
+                    await aiofiles.os.remove(tmp_path)
                 except Exception as e:
                     logger.error(f"删除临时文件失败: {str(e)}")
-
-    @filter.command("b50", priority = 1)
-    async def b50(self, event: AstrMessageEvent):
-        async for result in self._process_request(event, True):
-            yield result
-
-    @filter.command("b40", priority = 1)
-    async def b40(self, event: AstrMessageEvent):
-        async for result in self._process_request(event, False):
-            yield result
 
     @filter.command("maihelp", aliases={"舞萌帮助", "mai帮助"}, priority = 1)
     async def help_msg(self, event: AstrMessageEvent):
@@ -101,6 +145,15 @@ class MyPlugin(Star):
             b50 查看自己的B50
             b40 查看自己的B40"""
         yield event.plain_result(help_str)
+
+    async def _update_pl_background(self):
+        try:
+            await asyncio.wait_for(update_pl(), timeout=60)  # 增加超时到60秒
+            logger.info("后台更新机厅信息成功")
+        except asyncio.TimeoutError:
+            logger.warning("后台更新机厅信息超时")
+        except Exception as e:
+            logger.error(f"后台更新机厅信息失败: {e}")
 
     @filter.command("checkmai", aliases={"检查mai资源"}, priority = 1)
     async def checkmai(self, event: AstrMessageEvent):
@@ -119,13 +172,8 @@ class MyPlugin(Star):
         """异步的插件初始化"""
         await check_mai()
 
-        try:
-            await asyncio.wait_for(update_pl(), timeout=30)  # 设置30秒超时
-            logger.info("更新机厅信息成功")
-        except asyncio.TimeoutError:
-            logger.warning("更新机厅信息超时，将使用旧数据")
-        except Exception as e:
-            logger.error(f"更新机厅信息失败: {e}")
+        # 将机厅信息更新放入后台任务，防止阻塞初始化
+        asyncio.create_task(self._update_pl_background())
 
         # 音乐数据初始化
         try:
