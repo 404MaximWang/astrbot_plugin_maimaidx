@@ -28,7 +28,7 @@ async def convert_chart_info_to_api_format(chart_info: ChartInfo) -> Dict[str, A
         1: "advanced",
         2: "expert",
         3: "master",
-        4: "re:master"
+        4: "remaster"
     }
     difficulty_str = difficulty_map.get(chart_info.diff, "expert")
     type_str = "std" if chart_info.tp == "SD" else "dx"
